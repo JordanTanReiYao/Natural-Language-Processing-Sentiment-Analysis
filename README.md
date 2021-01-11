@@ -9,6 +9,6 @@
  ## In Clustering (TF-IDF).R:
  * The code makes use of TF-IDF to group sentences that have words with similar TF-IDF scores together. K-Medoids clustering is used here. The top words in each cluster are then identified.
 
-  ## In LDA (Avergae Topic Coherence).R:
+  ## In LDA (Topic_Coherence).R:
  * The code makes use of Latent Dirichlet Allocation to identify significant topics from the text corpus. The ideal number of topics is determined by looking at the coherence scores for the topics. The top words for each topic are then identified.
  
