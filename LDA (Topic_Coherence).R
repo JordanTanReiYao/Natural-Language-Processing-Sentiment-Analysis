@@ -38,63 +38,75 @@ path_data_prod <- file.path(dirname(dirname(rstudioapi::getSourceEditorContext()
 
 data_consolidated <- read.csv(file.path(path_data_processed, 'data_consolidated_20200629.csv'),na.strings = '')
 
-data20<-data_consolidated%>%filter(year==20)
-
-Other20<-data20%>%filter(category_digital==F&category_manpower==F)
-Digi20<-data20%>%filter(category_digital==T)
-Man20<-data20%>%filter(category_manpower==T)
-
 
 ### Function to split enquiry text into useful and non-useful parts
+## Separator words could be words like
+## discuss, engage, enquire
 splitter<-function(data){
-  separators<-readLines(file.path(path_data_raw,'separators.txt'),warn=F) #njs: change due to seperators.csv not being available
+  separators<-readLines(file.path(path_data_raw,'separators.txt'),warn=F) 
   newdata<-data
   newdata$split_or_not<-0
   separators<-stemDocument(separators)
   newdata$split_text<-''  
   newdata$sep_word<-'NIL'
   
-  ### Carry out splitting of enquiry text
-  ### Create variable that stores part of text which is actual enquiry ##
+  ### Carry out splitting of enquiry text based on separator word
+  ### Create variable that stores part of text which is actual enquiry
   ## If separator word is not found, just keep the whole text
+  ## Separator words are words like "Enquire"
   for (j in 1:nrow(newdata))
   {for (word in unlist(text_tokens(stripWhitespace(newdata$Problem.Statement[j])))){
     if (stemDocument(tolower(word)) %in% separators)
     {newdata$split_text[j]<-sub(paste('.*?',word,sep=''),word,tolower(stripWhitespace(newdata$Problem.Statement[j])))
-    newdata$split_or_not[j]<-1
-    newdata$sep_word[j]<-word
-    break}}
+      newdata$split_or_not[j]<-1
+      newdata$sep_word[j]<-word
+      break}}
+    
     if (newdata$split_or_not[j]==0)
       newdata$split_text[j]<-newdata$Problem.Statement[j]}
-  newdata$split_or_not<-factor(newdata$split_or_not)
-  return (newdata)
+  
+    newdata$split_or_not<-factor(newdata$split_or_not)
+    return (newdata)
 }
 
 ## Function to clean text
 cleaner<-function(corpus_data){
+  ## Remove unecessary whitespace
   cleanset<-tm_map(corpus_data,stripWhitespace)
+  
+  ## Convert to lowercase
   cleanset<-tm_map(cleanset,content_transformer(tolower))
-  cleanset<-tm_map(cleanset,stripWhitespace)
-  cleanset<-tm_map(cleanset,gsub,pattern='e-commerce',replacement='ecommerce')
+  
   ## Remove Non-ASCII Characters
   cleanset<-tm_map(cleanset,gsub,pattern='[^ -~]+',replacement='')
-  ## Replace some common terms with their abbreviations, such as psg
-  refer<-read.table(file=file.path(path_data_raw,'ref1.txt'),sep=',',quote='',comment.char='')
+  
+  ## Replace some common terms with their abbreviations, such as from
+  ## productivity solutions grant to psg
+  ## to standardize common terms
+  refer<-read.table(file=file.path(path_data_raw,'abbr.txt'),sep=',',quote='',comment.char='')
   class(refer)
   for (i in 1:nrow(refer))
   {
     cleanset<-tm_map(cleanset,gsub,pattern=refer[i,2],replacement=refer[i,1])
     cleanset<-tm_map(cleanset,stripWhitespace)
   }
+  
+  ## Remove non-word characters
   cleanset<-tm_map(cleanset,gsub,pattern='\\W+',replacement=' ')
   cleanset<-tm_map(cleanset,stripWhitespace)
+  
   ## Remove single letter words
   cleanset<-tm_map(cleanset,gsub,pattern='\\b[A-z]\\b{1}',replacement=' ')
   cleanset<-tm_map(cleanset,stripWhitespace)
+  
+  ## Remove numbers
   cleanset<-tm_map(cleanset,gsub,pattern='\\b\\d+\\b',replacement=' ')
   cleanset<-tm_map(cleanset,stripWhitespace)
+  
+  ## Lemmatize words
   cleanset<-tm_map(cleanset,lemmatize_strings)
   cleanset<-tm_map(cleanset,stripWhitespace)
+  
   ## Remove whitespace at front of document
   cleanset<-tm_map(cleanset,gsub,pattern='^[ \t]+',replacement='')
   ## Remove whitespace at end of document
@@ -115,6 +127,7 @@ buildmatrix<-function(cleanset,min,max){
   tok <- function(x)
     NGramTokenizer(x, Weka_control(min=1, max=2))
   
+  ## Create dtm with unigrams and bigrams
   dtm <- DocumentTermMatrix(cleanset_new, control=list(tokenize=tok,
                                                        bounds = list(global = c(minDocFreq, maxDocFreq))))
   
@@ -130,23 +143,13 @@ buildmatrix<-function(cleanset,min,max){
   ## Remove stopwords
   new_dtm<-new_dtm%>%filter(!word1 %in% lemma_stopwords)%>%filter(!word2 %in% lemma_stopwords)
   
-  ## Read in list of words to remove
-  rem<-readLines(file.path(path_data_raw,'removewords.txt'),warn=F)
-  new_dtm<-new_dtm%>%filter(!word1 %in% rem)%>%filter(!word2 %in% rem)
-  
-  
-  new_dtm<-new_dtm%>%unite(word,word1,word2,sep=' ')%>%select(document,word)
-  new_dtm<-new_dtm%>%count(document,word)
-  
-  new_dtm<-new_dtm%>%separate(word,c('word1','word2'),sep=' ')
   
   new_dtm<-new_dtm%>%mutate(word2=replace(word2,word2=='NA',''))
   new_dtm<-new_dtm%>%unite(word,word1,word2,sep=' ')%>%select(document,word)
   new_dtm<-new_dtm%>%mutate(word=gsub(word,pattern='[ \t]+$',replacement=''))
   new_dtm<-new_dtm%>%count(document,word)
   new_dtm<-new_dtm%>%mutate(document=as.integer(document))
-  new_dtm
-  
+
   new_dtm<-new_dtm%>%cast_dtm(document,word,n)
   return (new_dtm)
 }
@@ -166,6 +169,37 @@ prepmatrix<-function(dtm){
 genlda<-function(built_matrix,num_topics){
   lda<-LDA(built_matrix,k=num_topics,method='Gibbs',control=list(seed=1000))
   return (lda)
+}
+
+## Function to generate average topic coherence scores for LDA models 
+## with different minimum term frequency and number of topics combinations
+## Function will take quite long to run
+## as it is generating many LDA models all at once
+GenRecordTable<-function(cleanseto,minrange)
+{
+  record_table<-data.frame(minfreq=numeric(),numtopics=integer(),
+                           coherence=numeric(),number_of_terms=integer())
+  for (j in minrange)
+  {
+    dtm<-buildmatrix(cleanseto,j,95)
+    
+    numterms<-length(Terms(dtm))
+    
+    built_matrix<-prepmatrix(dtm)
+    
+    ## Range of topics to test is in the range of 5 to 9
+    for (i in 5:9)
+    {
+      ldao20<-genlda(built_matrix,i)
+      
+      coh<-topic_coherence(ldao20,built_matrix,top_n_tokens=5)
+      avecoh<-mean(coh)
+      record_table[nrow(record_table)+1,]<-list(j,i,avecoh,numterms)
+    }
+  }
+  
+  record_table<-record_table%>%arrange(desc(coherence))
+  return (record_table)
 }
 
 ## Function to plot keywords in each topic for LDA model
@@ -237,36 +271,7 @@ get_samples <- function(lda_object, df, n_samples, extra_threshold, topic_no_vec
 }
 
 
-## Function to generate average topic coherence scores for LDA models 
-## with different minimum frequency and number of topics combinations
-## Function will take quite long to run
-## as it is generating many LDA models all at once
-GenRecordTable<-function(cleanseto,minrange)
-{
-  record_table<-data.frame(minfreq=numeric(),numtopics=integer(),
-                           coherence=numeric(),number_of_terms=integer())
-  for (j in minrange)
-  {
-    dtm<-buildmatrix(cleanseto,j,95)
-    
-    numterms<-length(Terms(dtm))
-    
-    built_matrix<-prepmatrix(dtm)
-    
-    ## Range of topics to test is in the range of 5 to 9
-    for (i in 5:9)
-    {
-      ldao20<-genlda(built_matrix,i)
-      
-      coh<-topic_coherence(ldao20,built_matrix,top_n_tokens=5)
-      avecoh<-mean(coh)
-      record_table[nrow(record_table)+1,]<-list(j,i,avecoh,numterms)
-    }
-  }
-  
-  record_table<-record_table%>%arrange(desc(coherence))
-  return (record_table)
-}
+
 
 ## Function to create a table for the topics showing keywords for each topic
 getTopicsTables<-function(lda,n,df,extra_threshold,categoryID)
@@ -542,4 +547,10 @@ combinedTopicsTable<-combineTables(OthersTopicTable,DigitalTopicTable,ManpowerTo
 combinedAssignmentTable<-combineTables(OthersAssignmentTable,DigitalAssignmentTable,ManpowerAssignmentTable,'TopicAssigned','200720')
 
 
+
+#data20<-data_consolidated%>%filter(year==20)
+
+#Other20<-data20%>%filter(category_digital==F&category_manpower==F)
+#Digi20<-data20%>%filter(category_digital==T)
+#Man20<-data20%>%filter(category_manpower==T)
 
